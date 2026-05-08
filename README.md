@@ -1,6 +1,6 @@
 # Defect Phase Diagram
 
-A Python tool for constructing and visualising **defect phase diagrams (DPDs)** for binary alloy surface systems, identifying which defect configuration is thermodynamically stable across a range of solute chemical potentials.
+A Python tool for constructing and visualising **defect phase diagrams (DPDs)** for binary alloy systems, identifying and predicting thermodynamically of stable and mestastable defct phases across a range of solute chemical potentials.
 
 ---
 
@@ -13,8 +13,7 @@ In computational materials science, a defect phase diagram maps the thermodynami
 ## Features
 
 - Registry-style API — add phases one at a time with `add_phase()`
-- Supports both **surface slab** and **periodic supercell** geometries
-- Temperature-dependent energies (e.g. from free-energy corrections)
+- Temperature-dependent energies (e.g. from free-energy considerations)
 - Vectorized NumPy formation energy calculation
 - Automatic stable-phase envelope tracing via pairwise line intersections
 - Clean `matplotlib` output with filled stability regions
@@ -46,9 +45,9 @@ dpd = DefectPhaseDiagram(
     output_energy_units='meV',
 )
 
-dpd.add_phase('1 Al sub.', n_solute=1, n_total=96,
+dpd.add_phase('GB - 1 Al sub.', n_solute=1, n_total=96,
               e_alloy=-401.12, e_pure=-398.50, area=120.0)
-dpd.add_phase('2 Al sub.', n_solute=2, n_total=96,
+dpd.add_phase('GB - 2 Al sub.', n_solute=2, n_total=96,
               e_alloy=-403.85, e_pure=-398.50, area=120.0)
 
 fig, ax = dpd.plot_at_temperature(300)
@@ -97,7 +96,7 @@ Returns `(fig, ax)`.
 For each phase, the formation energy per unit area at chemical potential Δμ_x is:
 
 ```
-E_f = [2·E_alloy − E_pure − (N − 2n)·μ_Mg − 2n·(μ_bulk + Δμ_x)] / A
+E_f = [2·E_alloy − E_pure − (N − 2n)·μ_Mg − 2n·(μ_bulk + Δμ_x)] / (2·A)
 ```
 
 where `N` = total atoms, `n` = solute atoms, `A` = effective area.
