@@ -1,14 +1,12 @@
 # Defect Phase Diagram
 
-A Python tool for constructing and visualising **defect phase diagrams (DPDs)** for binary alloy systems, identifying which defect configuration is thermodynamically stable across a range of solute chemical potentials.
-
-All supercells are assumed to be fully periodic, containing two identical defect interfaces (e.g. grain boundaries) by construction. Formation energies are normalised per interface area.
+A Python tool for constructing and visualising **defect phase diagrams (DPDs)** for binary alloy systems, for analysing the thermodynamic stability of defect phases across a range of solute chemical potentials.
 
 ---
 
 ## What is a Defect Phase Diagram?
 
-In computational materials science, a defect phase diagram maps the thermodynamic stability of competing defect configurations (e.g. different solute arrangements at a grain boundary) as a function of the solute chemical potential Δμ. At each value of Δμ, the stable phase is the one with the lowest formation energy per unit area.
+In computational materials science, a defect phase diagram maps the thermodynamic stability of stable and metastable phases as a function of the solute chemical potential Δμ. At each value of Δμ, the stable phase is the one with the lowest formation energy per unit area.
 
 ---
 
@@ -67,7 +65,7 @@ For each periodic supercell containing two identical defect interfaces, the form
 E_f = [2·E_alloy − E_pure − (N − 2n)·μ_host − 2n·(μ_bulk + Δμ_solute)] / (2·A)
 ```
 
-where `N` = total atoms, `n` = solute atoms, `A` = cross-sectional area of one interface. The factor of 2 in the denominator normalises per interface rather than per cell.
+where `N` = total atoms, `n` = solute atoms, `A` = cross-sectional area of one interface. The factor of 2 in the denominator normalises per interface rather than per cell. All supercells are assumed to be fully periodic, containing two identical defect interfaces (e.g. grain boundaries) by construction. Formation energies are normalised per interface area.
 
 ---
 
