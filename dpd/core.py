@@ -15,24 +15,28 @@ class DefectPhaseDiagram:
     at each value of the solute chemical potential by finding the lowest
     formation energy envelope and the intersections between competing phases.
 
+    All supercells are assumed to be fully periodic, containing two defects
+    (e.g. grain boundaries) by construction. Formation energies are
+    normalised per unit area of the defect interface.
+
     Uses a registry-style API: phases are added one at a time via
     :meth:`add_phase`, and formation energies are computed lazily on the
     first call to a plot method.
 
     Parameters
     ----------
-    x_element : str
+    solute_element : str
         Symbol of the solute element (used for axis labels, e.g. ``'Al'``).
-    mu_x : array-like, shape (2,) or (N,)
+    mu_solute : array-like, shape (2,) or (N,)
         Chemical potential range of the solute element [eV]. Only the first
         and last values are used to define the range endpoints.
-    mu_Mg : float or array-like
-        Chemical potential of Mg [eV]. Supply a scalar for a fixed value or
-        an array of length ``len(temperatures)`` for temperature-dependent
-        values. Used for surface/non-periodic phases only.
-    mu_x_bulk : float or array-like
+    mu_host : float or array-like
+        Chemical potential of the host element [eV]. Supply a scalar for a
+        fixed value or an array of length ``len(temperatures)`` for
+        temperature-dependent values.
+    mu_solute_bulk : float or array-like
         Chemical potential of the solute in its reference bulk phase [eV].
-        Same scalar-or-array convention as ``mu_Mg``.
+        Same scalar-or-array convention as ``mu_host``.
     temperatures : float or array-like
         Temperatures [K] corresponding to the supplied energies.
     output_energy_units : {'meV', 'eV'}, optional
@@ -46,7 +50,7 @@ class DefectPhaseDiagram:
     phases : list of dict
         Registry of phases added via :meth:`add_phase`. Each entry contains
         keys: ``label``, ``n_solute``, ``n_total``, ``e_alloy``, ``e_pure``,
-        ``area``, ``is_periodic``.
+        ``area``.
     labels : list of str
         Phase labels in registration order. Populated after the first call
         to a plot method or :meth:`_compute_energies`.
@@ -57,10 +61,10 @@ class DefectPhaseDiagram:
     Examples
     --------
     >>> dpd = DefectPhaseDiagram(
-    ...     x_element='Al',
-    ...     mu_x=[-2.0, 0.0],
-    ...     mu_Mg=-1.5,
-    ...     mu_x_bulk=-3.2,
+    ...     solute_element='Al',
+    ...     mu_solute=[-2.0, 0.0],
+    ...     mu_host=-1.5,
+    ...     mu_solute_bulk=-3.2,
     ...     temperatures=300,
     ... )
     >>> dpd.add_phase('Phase A', n_solute=1, n_total=96,
@@ -73,19 +77,19 @@ class DefectPhaseDiagram:
 
     def __init__(
         self,
-        x_element,
-        mu_x,
-        mu_Mg,
-        mu_x_bulk,
+        solute_element,
+        mu_solute,
+        mu_host,
+        mu_solute_bulk,
         temperatures,
         output_energy_units='meV',
         colormap='mako_r',
     ):
-        self.element = x_element
-        self.mu_x = np.array([mu_x[0], mu_x[-1]], dtype=float)
+        self.element = solute_element
+        self.mu_solute = np.array([mu_solute[0], mu_solute[-1]], dtype=float)
         self.temperatures = np.atleast_1d(temperatures)
-        self.mu_Mg = np.atleast_1d(mu_Mg)
-        self.mu_x_bulk = np.atleast_1d(mu_x_bulk)
+        self.mu_host = np.atleast_1d(mu_host)
+        self.mu_solute_bulk = np.atleast_1d(mu_solute_bulk)
         self.output_energy_units = output_energy_units
         self.colormap = colormap
 
@@ -104,16 +108,7 @@ class DefectPhaseDiagram:
     # Public API
     # ------------------------------------------------------------------
 
-    def add_phase(
-        self,
-        label,
-        n_solute,
-        n_total,
-        e_alloy,
-        e_pure,
-        area,
-        is_periodic=False,
-    ):
+    def add_phase(self, label, n_solute, n_total, e_alloy, e_pure, area):
         """
         Register a defect phase with the diagram.
 
@@ -130,24 +125,20 @@ class DefectPhaseDiagram:
         n_total : int
             Total number of atoms in the supercell.
         e_alloy : float or array-like
-            DFT total energy of the supercell containing the solute defect
-            [eV]. Supply a scalar for a temperature-independent value or an
-            array of length ``len(temperatures)`` for temperature-dependent
-            energies (e.g. from free-energy corrections).
+            DFT total energy of the periodic supercell containing the solute
+            defect [eV]. The supercell contains two defect interfaces by
+            construction. Supply a scalar for a temperature-independent value
+            or an array of length ``len(temperatures)`` for
+            temperature-dependent energies (e.g. from free-energy
+            corrections).
         e_pure : float or array-like
             DFT total energy of the pure reference supercell [eV]. Same
             scalar-or-array convention as ``e_alloy``.
         area : float
-            Cross-sectional area of the supercell [Å²] used for energy
-            normalisation. For surface slabs (``is_periodic=False``) this
-            is doubled internally; for periodic supercells it is used as-is.
-        is_periodic : bool, optional
-            Set to ``True`` for fully periodic supercells (two defects, no
-            vacuum). The area is then used as-is and ``mu_Mg[0]`` /
-            ``mu_x_bulk[0]`` are applied at all temperatures.
-            Set to ``False`` (default) for surface slabs with a single
-            defect and a vacuum region; the area is doubled and the full
-            temperature-dependent ``mu_Mg`` / ``mu_x_bulk`` arrays are used.
+            Cross-sectional area of the defect interface [Å²] used for
+            energy normalisation. Since the supercell contains two identical
+            interfaces, the formation energy is computed as
+            ``(2·E_alloy - E_pure - ...) / (2·area)``.
 
         Warns
         -----
@@ -157,17 +148,17 @@ class DefectPhaseDiagram:
 
         Examples
         --------
-        Add a surface (non-periodic) phase with scalar energies:
+        Add a phase with scalar (temperature-independent) energies:
 
-        >>> dpd.add_phase('HCP', n_solute=1, n_total=96,
+        >>> dpd.add_phase('GB-I', n_solute=1, n_total=96,
         ...               e_alloy=-400.1, e_pure=-398.5, area=120.0)
 
-        Add a periodic phase with temperature-dependent energies:
+        Add a phase with temperature-dependent energies:
 
-        >>> dpd.add_phase('FCC', n_solute=2, n_total=96,
+        >>> dpd.add_phase('GB-II', n_solute=2, n_total=96,
         ...               e_alloy=[-401.1, -401.3, -401.6],
         ...               e_pure=[-398.5, -398.7, -399.0],
-        ...               area=120.0, is_periodic=True)
+        ...               area=120.0)
         """
         e_alloy = np.atleast_1d(e_alloy)
         e_pure = np.atleast_1d(e_pure)
@@ -187,7 +178,6 @@ class DefectPhaseDiagram:
             'e_alloy': e_alloy,
             'e_pure': e_pure,
             'area': area,
-            'is_periodic': is_periodic,
         })
         self._energies = None  # Invalidate cache
 
@@ -196,30 +186,31 @@ class DefectPhaseDiagram:
         Identify the thermodynamically stable phase at each chemical
         potential by tracing the lowest formation energy envelope.
 
-        Starting from ``mu_x[0]``, the algorithm selects the phase with the
-        lowest formation energy, then advances to the next intersection where
-        a different phase becomes more stable, repeating until ``mu_x[-1]``.
+        Starting from ``mu_solute[0]``, the algorithm selects the phase with
+        the lowest formation energy, then advances to the next intersection
+        where a different phase becomes more stable, repeating until
+        ``mu_solute[-1]``.
 
         Parameters
         ----------
         energies_at_t : np.ndarray, shape (n_phases, 2)
-            Formation energies at ``mu_x[0]`` and ``mu_x[-1]`` for each
-            phase at a single temperature, i.e.
+            Formation energies at ``mu_solute[0]`` and ``mu_solute[-1]`` for
+            each phase at a single temperature, i.e.
             ``self._energies[:, t_idx, :]``.
 
         Returns
         -------
         order : list of int
             Phase indices in the order they become stable, from left
-            (``mu_x[0]``) to right (``mu_x[-1]``).
+            (``mu_solute[0]``) to right (``mu_solute[-1]``).
         ordered_mu : list of float
             Boundary chemical potentials [eV] delimiting each stability
             window. Always satisfies ``len(ordered_mu) == len(order) + 1``,
-            ``ordered_mu[0] == mu_x[0]``, and
-            ``ordered_mu[-1] == mu_x[-1]``.
+            ``ordered_mu[0] == mu_solute[0]``, and
+            ``ordered_mu[-1] == mu_solute[-1]``.
         rejected : list of int
             Sorted indices of phases that are never the lowest-energy phase
-            anywhere in the ``mu_x`` range.
+            anywhere in the ``mu_solute`` range.
 
         Notes
         -----
@@ -238,14 +229,14 @@ class DefectPhaseDiagram:
             for i in range(n_p)
         ])
 
-        cur_mu = self.mu_x[0]
+        cur_mu = self.mu_solute[0]
         active = int(np.argmin(energies_at_t[:, 0]))
         order, ordered_mu = [active], [cur_mu]
 
-        while cur_mu < self.mu_x[1] - 1e-9:
+        while cur_mu < self.mu_solute[1] - 1e-9:
             valid_mask = (
                 (intersections[active] > cur_mu + 1e-9)
-                & (intersections[active] <= self.mu_x[1])
+                & (intersections[active] <= self.mu_solute[1])
             )
             valid_ints = intersections[active, valid_mask]
             if not len(valid_ints):
@@ -259,7 +250,7 @@ class DefectPhaseDiagram:
             ordered_mu.append(next_mu)
             active, cur_mu = next_phase, next_mu
 
-        ordered_mu.append(self.mu_x[1])
+        ordered_mu.append(self.mu_solute[1])
         rejected = sorted(set(range(n_p)) - set(order))
         return order, ordered_mu, rejected
 
@@ -287,7 +278,7 @@ class DefectPhaseDiagram:
             ``self.temperatures`` is selected automatically.
         xlim : tuple of float, optional
             ``(x_min, x_max)`` chemical potential axis limits [eV]. Defaults
-            to the full ``mu_x`` range.
+            to the full ``mu_solute`` range.
         ylim : tuple of float, optional
             ``(y_min, y_max)`` formation energy axis limits in
             ``output_energy_units``. Computed automatically if not supplied:
@@ -333,7 +324,7 @@ class DefectPhaseDiagram:
         for r_idx in rejected:
             e = self._energies[r_idx, t_idx] * self._unit_scale
             ax.plot(
-                self.mu_x, e,
+                self.mu_solute, e,
                 color=self.palette[r_idx],
                 ls='--', alpha=0.3, lw=1,
             )
@@ -342,9 +333,9 @@ class DefectPhaseDiagram:
         for i, p_idx in enumerate(order):
             e = self._energies[p_idx, t_idx]
             mu_s, mu_e = ordered_mu[i], ordered_mu[i + 1]
-            slope = (e[1] - e[0]) / (self.mu_x[1] - self.mu_x[0])
-            y_s = self._unit_scale * (e[0] + slope * (mu_s - self.mu_x[0]))
-            y_e = self._unit_scale * (e[0] + slope * (mu_e - self.mu_x[0]))
+            slope = (e[1] - e[0]) / (self.mu_solute[1] - self.mu_solute[0])
+            y_s = self._unit_scale * (e[0] + slope * (mu_s - self.mu_solute[0]))
+            y_e = self._unit_scale * (e[0] + slope * (mu_e - self.mu_solute[0]))
 
             ax.fill_between(
                 [mu_s, mu_e], [y_s, y_e], y_floor,
@@ -357,7 +348,7 @@ class DefectPhaseDiagram:
 
         ax.set_xlabel(self.xlabel, fontsize=13)
         ax.set_ylabel(self.ylabel, fontsize=13)
-        ax.set_xlim(xlim if xlim is not None else self.mu_x)
+        ax.set_xlim(xlim if xlim is not None else self.mu_solute)
 
         if ylim:
             ax.set_ylim(ylim)
@@ -382,22 +373,21 @@ class DefectPhaseDiagram:
         Vectorized computation of formation energies for all phases and
         temperatures, caching the result in ``self._energies``.
 
-        The formation energy per unit area at chemical potential endpoint
-        ``Δμ_x`` is evaluated as:
+        All supercells are fully periodic and contain two identical defect
+        interfaces by construction. The formation energy per interface area
+        is evaluated as:
 
         .. math::
 
             E_f = \\frac{2 E_{\\rm alloy} - E_{\\rm pure}
-                         - (N - 2n)\\mu_{\\rm Mg}
-                         - 2n(\\mu_{\\rm bulk} + \\Delta\\mu_x)}{A}
+                         - (N - 2n)\\mu_{\\rm host}
+                         - 2n(\\mu_{\\rm bulk} + \\Delta\\mu_{\\rm solute})}
+                        {2A}
 
-        where :math:`N` is the total atom count, :math:`n` the solute atom
-        count, and :math:`A` the effective area (doubled for surface slabs).
-
-        For periodic supercells (``is_periodic=True``), ``mu_Mg[0]`` and
-        ``mu_x_bulk[0]`` are broadcast across all temperatures. For surface
-        slabs (``is_periodic=False``), the full temperature-dependent arrays
-        are used.
+        where :math:`N` is the total atom count, :math:`n` the number of
+        solute atoms, and :math:`A` the cross-sectional area of one
+        interface. The factor of 2 in the denominator normalises per
+        interface rather than per cell.
 
         Raises
         ------
@@ -410,7 +400,7 @@ class DefectPhaseDiagram:
 
         - ``self._energies`` : np.ndarray, shape ``(n_phases, n_temps, 2)``
           Formation energies [eV/Å²]. Axis 2 holds
-          ``[E_f(mu_x[0]), E_f(mu_x[-1])]``.
+          ``[E_f(mu_solute[0]), E_f(mu_solute[-1])]``.
         - ``self.labels`` : list of str
         - ``self.palette`` : list of colours
         """
@@ -421,36 +411,31 @@ class DefectPhaseDiagram:
 
         # Shape: (n_phases, n_temps)
         e_alloy = np.array(df['e_alloy'].tolist())
-        e_pure = np.array(df['e_pure'].tolist())
+        e_pure  = np.array(df['e_pure'].tolist())
 
         # Shape: (n_phases, 1) for broadcasting over temperatures
-        area = df['area'].values[:, np.newaxis]
+        area     = df['area'].values[:, np.newaxis]
         n_solute = df['n_solute'].values[:, np.newaxis]
-        n_total = df['n_total'].values[:, np.newaxis]
-        is_periodic = df['is_periodic'].values[:, np.newaxis]
+        n_total  = df['n_total'].values[:, np.newaxis]
 
-        # Periodic phases use index-0 potentials; surface phases use full arrays
-        mu_Mg_m = np.where(is_periodic, self.mu_Mg[0], self.mu_Mg)
-        mu_bulk_m = np.where(is_periodic, self.mu_x_bulk[0], self.mu_x_bulk)
-        area_m = np.where(is_periodic, area, area * 2)
-
-        # Chemical potential endpoints: shape (1, 1, 2) for broadcasting
-        d_mu = self.mu_x[np.newaxis, np.newaxis, :]
+        # Solute chemical potential endpoints: shape (1, 1, 2) for broadcasting
+        d_mu = self.mu_solute[np.newaxis, np.newaxis, :]
 
         # Host and solute chemical potential contributions
-        host_term = (n_total - 2 * n_solute) * mu_Mg_m   # (n_phases, n_temps)
+        host_term   = (n_total - 2 * n_solute) * self.mu_host    # (n_phases, n_temps)
         solute_term = (
-            2 * n_solute * (mu_bulk_m[:, :, np.newaxis] + d_mu)
-        )                                                  # (n_phases, n_temps, 2)
+            2 * n_solute * (self.mu_solute_bulk[:, np.newaxis] + d_mu)
+        )                                                          # (n_phases, 1, 2) → broadcasts
 
         raw = (
             2 * e_alloy[:, :, np.newaxis]
             - e_pure[:, :, np.newaxis]
             - host_term[:, :, np.newaxis]
             - solute_term
-        )                                                  # (n_phases, n_temps, 2)
+        )                                                          # (n_phases, n_temps, 2)
 
-        self._energies = raw / area_m[:, :, np.newaxis]
+        # Normalise per interface: supercell contains 2 identical interfaces
+        self._energies = raw / (2 * area[:, :, np.newaxis])
 
         self.labels = df['label'].tolist()
         self.palette = (
@@ -461,18 +446,21 @@ class DefectPhaseDiagram:
 
     def _calculate_intersection(self, e1, e2):
         """
-        Find the chemical potential at which two linear E_f(Δμ_x) lines cross.
+        Find the chemical potential at which two linear E_f(Δμ_solute)
+        lines cross.
 
         Both formation energy curves are assumed to be linear between
-        ``mu_x[0]`` and ``mu_x[-1]``, defined by their values at those
-        two endpoints.
+        ``mu_solute[0]`` and ``mu_solute[-1]``, defined by their values at
+        those two endpoints.
 
         Parameters
         ----------
         e1 : array-like, shape (2,)
-            ``[E_f(mu_x[0]), E_f(mu_x[-1])]`` for the first phase [eV/Å²].
+            ``[E_f(mu_solute[0]), E_f(mu_solute[-1])]`` for the first phase
+            [eV/Å²].
         e2 : array-like, shape (2,)
-            ``[E_f(mu_x[0]), E_f(mu_x[-1])]`` for the second phase [eV/Å²].
+            ``[E_f(mu_solute[0]), E_f(mu_solute[-1])]`` for the second phase
+            [eV/Å²].
 
         Returns
         -------
@@ -481,9 +469,9 @@ class DefectPhaseDiagram:
             if the two lines are parallel (slopes differ by less than the
             ``np.isclose`` tolerance).
         """
-        mu_range = self.mu_x[1] - self.mu_x[0]
+        mu_range = self.mu_solute[1] - self.mu_solute[0]
         slope1 = (e1[1] - e1[0]) / mu_range
         slope2 = (e2[1] - e2[0]) / mu_range
         if np.isclose(slope1, slope2):
             return np.inf
-        return self.mu_x[0] + (e2[0] - e1[0]) / (slope1 - slope2)
+        return self.mu_solute[0] + (e2[0] - e1[0]) / (slope1 - slope2)

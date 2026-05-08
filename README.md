@@ -1,19 +1,21 @@
 # Defect Phase Diagram
 
-A Python tool for constructing and visualising **defect phase diagrams (DPDs)** for binary alloy systems, identifying and predicting thermodynamically of stable and mestastable defct phases across a range of solute chemical potentials.
+A Python tool for constructing and visualising **defect phase diagrams (DPDs)** for binary alloy systems, identifying which defect configuration is thermodynamically stable across a range of solute chemical potentials.
+
+All supercells are assumed to be fully periodic, containing two identical defect interfaces (e.g. grain boundaries) by construction. Formation energies are normalised per interface area.
 
 ---
 
 ## What is a Defect Phase Diagram?
 
-In computational materials science, a defect phase diagram maps the thermodynamic stability of competing defect configurations (e.g. different substitutional arrangements of a solute element) as a function of the solute chemical potential Δμ. At each value of Δμ, the stable phase is the one with the lowest formation energy per unit area.
+In computational materials science, a defect phase diagram maps the thermodynamic stability of competing defect configurations (e.g. different solute arrangements at a grain boundary) as a function of the solute chemical potential Δμ. At each value of Δμ, the stable phase is the one with the lowest formation energy per unit area.
 
 ---
 
 ## Features
 
 - Registry-style API — add phases one at a time with `add_phase()`
-- Temperature-dependent energies (e.g. from free-energy considerations)
+- Temperature-dependent energies (e.g. from free-energy corrections)
 - Vectorized NumPy formation energy calculation
 - Automatic stable-phase envelope tracing via pairwise line intersections
 - Clean `matplotlib` output with filled stability regions
@@ -23,8 +25,8 @@ In computational materials science, a defect phase diagram maps the thermodynami
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/defect-phase-diagram.git
-cd defect-phase-diagram
+git clone https://github.com/prince-mathews/defect_phase_diagram.git
+cd defect_phase_diagram
 pip install -r requirements.txt
 ```
 
@@ -37,17 +39,17 @@ import numpy as np
 from dpd import DefectPhaseDiagram
 
 dpd = DefectPhaseDiagram(
-    x_element='Al',
-    mu_x=[-2.0, 0.0],
-    mu_Mg=-1.52,
-    mu_x_bulk=-3.21,
+    solute_element='Al',
+    mu_solute=[-2.0, 0.0],
+    mu_host=-1.52,
+    mu_solute_bulk=-3.21,
     temperatures=300,
     output_energy_units='meV',
 )
 
-dpd.add_phase('GB - 1 Al sub.', n_solute=1, n_total=96,
+dpd.add_phase('GB Phase I',  n_solute=1, n_total=96,
               e_alloy=-401.12, e_pure=-398.50, area=120.0)
-dpd.add_phase('GB - 2 Al sub.', n_solute=2, n_total=96,
+dpd.add_phase('GB Phase II', n_solute=2, n_total=96,
               e_alloy=-403.85, e_pure=-398.50, area=120.0)
 
 fig, ax = dpd.plot_at_temperature(300)
@@ -57,21 +59,33 @@ See [`examples/example_usage.py`](examples/example_usage.py) for a full walkthro
 
 ---
 
+## Formation Energy Formula
+
+For each periodic supercell containing two identical defect interfaces, the formation energy per interface area at chemical potential Δμ_solute is:
+
+```
+E_f = [2·E_alloy − E_pure − (N − 2n)·μ_host − 2n·(μ_bulk + Δμ_solute)] / (2·A)
+```
+
+where `N` = total atoms, `n` = solute atoms, `A` = cross-sectional area of one interface. The factor of 2 in the denominator normalises per interface rather than per cell.
+
+---
+
 ## API Reference
 
-### `DefectPhaseDiagram(x_element, mu_x, mu_Mg, mu_x_bulk, temperatures, ...)`
+### `DefectPhaseDiagram(solute_element, mu_solute, mu_host, mu_solute_bulk, temperatures, ...)`
 
 | Parameter | Type | Description |
 |---|---|---|
-| `x_element` | `str` | Solute element symbol (e.g. `'Al'`) |
-| `mu_x` | array-like | Chemical potential range [eV]; only endpoints are used |
-| `mu_Mg` | float or array | Mg chemical potential [eV]; array for temperature-dependent values |
-| `mu_x_bulk` | float or array | Solute bulk reference chemical potential [eV] |
+| `solute_element` | `str` | Solute element symbol (e.g. `'Al'`) |
+| `mu_solute` | array-like | Chemical potential range [eV]; only endpoints are used |
+| `mu_host` | float or array | Host element chemical potential [eV]; array for temperature-dependent values |
+| `mu_solute_bulk` | float or array | Solute bulk reference chemical potential [eV] |
 | `temperatures` | float or array | Temperatures [K] matching the energy arrays |
 | `output_energy_units` | `'meV'` or `'eV'` | Y-axis units (default `'meV'`) |
 | `colormap` | str or list | Seaborn colormap name or list of colours (default `'mako_r'`) |
 
-### `add_phase(label, n_solute, n_total, e_alloy, e_pure, area, is_periodic=False)`
+### `add_phase(label, n_solute, n_total, e_alloy, e_pure, area)`
 
 Registers a defect phase. `e_alloy` and `e_pure` accept scalars or arrays (one value per temperature).
 
@@ -82,24 +96,11 @@ Registers a defect phase. `e_alloy` and `e_pure` accept scalars or arrays (one v
 | `n_total` | Total atoms in the supercell |
 | `e_alloy` | DFT energy of the defect supercell [eV] |
 | `e_pure` | DFT energy of the pure reference supercell [eV] |
-| `area` | Cross-sectional area [Å²] (doubled internally for surface slabs) |
-| `is_periodic` | `True` for periodic supercells; `False` (default) for surface slabs |
+| `area` | Cross-sectional area of one defect interface [Å²] |
 
 ### `plot_at_temperature(temperature, xlim=None, ylim=None, alpha_fill=0.7, legend=True)`
 
 Returns `(fig, ax)`.
-
----
-
-## Formation Energy Formula
-
-For each phase, the formation energy per unit area at chemical potential Δμ_x is:
-
-```
-E_f = [2·E_alloy − E_pure − (N − 2n)·μ_Mg − 2n·(μ_bulk + Δμ_x)] / (2·A)
-```
-
-where `N` = total atoms, `n` = solute atoms, `A` = effective area.
 
 ---
 

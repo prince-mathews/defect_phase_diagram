@@ -10,10 +10,10 @@ from dpd import DefectPhaseDiagram
 def base_dpd():
     """Minimal DefectPhaseDiagram with two phases for reuse across tests."""
     dpd = DefectPhaseDiagram(
-        x_element='Al',
-        mu_x=[-2.0, 0.0],
-        mu_Mg=-1.5,
-        mu_x_bulk=-3.2,
+        solute_element='Al',
+        mu_solute=[-2.0, 0.0],
+        mu_host=-1.5,
+        mu_solute_bulk=-3.2,
         temperatures=300,
         output_energy_units='meV',
     )
@@ -27,11 +27,12 @@ def base_dpd():
 # ── Initialisation ────────────────────────────────────────────────────────────
 
 class TestInit:
-    def test_mu_x_endpoints_stored(self):
-        dpd = DefectPhaseDiagram('Al', mu_x=[-2, -1, 0],
-                                 mu_Mg=-1.5, mu_x_bulk=-3.2, temperatures=300)
-        assert dpd.mu_x[0] == -2.0
-        assert dpd.mu_x[1] == 0.0
+    def test_mu_solute_endpoints_stored(self):
+        dpd = DefectPhaseDiagram('Al', mu_solute=[-2, -1, 0],
+                                 mu_host=-1.5, mu_solute_bulk=-3.2,
+                                 temperatures=300)
+        assert dpd.mu_solute[0] == -2.0
+        assert dpd.mu_solute[1] == 0.0
 
     def test_unit_scale_meV(self):
         dpd = DefectPhaseDiagram('Al', [-2, 0], -1.5, -3.2, 300,
@@ -60,6 +61,10 @@ class TestAddPhase:
 
     def test_phase_label_stored(self, base_dpd):
         assert base_dpd.phases[0]['label'] == 'Phase A'
+
+    def test_no_is_periodic_key(self, base_dpd):
+        """is_periodic should no longer exist in phase registry."""
+        assert 'is_periodic' not in base_dpd.phases[0]
 
     def test_nan_e_alloy_skipped(self):
         dpd = DefectPhaseDiagram('Al', [-2, 0], -1.5, -3.2, 300)
@@ -106,20 +111,30 @@ class TestComputeEnergies:
         with pytest.raises(ValueError, match="No phases added"):
             dpd._compute_energies()
 
-    def test_periodic_uses_first_mu_Mg(self):
-        """Periodic phases should always use mu_Mg[0], not per-temperature."""
+    def test_temperature_dependent_energies(self):
+        """Energy arrays should broadcast correctly across temperatures."""
         dpd = DefectPhaseDiagram(
             'Al', [-2, 0],
-            mu_Mg=[-1.5, -1.6, -1.7],
-            mu_x_bulk=[-3.2, -3.3, -3.4],
+            mu_host=[-1.5, -1.6, -1.7],
+            mu_solute_bulk=[-3.2, -3.3, -3.4],
             temperatures=[300, 400, 500],
         )
-        dpd.add_phase('Periodic', 1, 96,
+        dpd.add_phase('GB', n_solute=1, n_total=96,
                       e_alloy=[-400.1, -400.2, -400.3],
                       e_pure=[-398.5, -398.6, -398.7],
-                      area=120.0, is_periodic=True)
+                      area=120.0)
         dpd._compute_energies()
         assert dpd._energies.shape == (1, 3, 2)
+
+    def test_normalised_by_2_area(self):
+        """Formation energy should be divided by 2*area for periodic cells."""
+        dpd = DefectPhaseDiagram('Al', [0, 0], 0.0, 0.0, 300)
+        # With all potentials zero and simple energies, raw = 2*e_alloy - e_pure
+        dpd.add_phase('Test', n_solute=0, n_total=0,
+                      e_alloy=10.0, e_pure=0.0, area=5.0)
+        dpd._compute_energies()
+        # raw = 2*10 - 0 = 20, divided by 2*5 = 10 → E_f = 2.0
+        assert np.allclose(dpd._energies[0, 0], 2.0)
 
 
 # ── _calculate_intersection ───────────────────────────────────────────────────
@@ -151,14 +166,13 @@ class TestGetStablePhases:
     def test_ordered_mu_bounds(self, base_dpd):
         base_dpd._compute_energies()
         _, ordered_mu, _ = base_dpd.get_stable_phases(base_dpd._energies[:, 0])
-        assert ordered_mu[0] == base_dpd.mu_x[0]
-        assert ordered_mu[-1] == base_dpd.mu_x[1]
+        assert ordered_mu[0] == base_dpd.mu_solute[0]
+        assert ordered_mu[-1] == base_dpd.mu_solute[1]
 
     def test_rejected_plus_order_covers_all(self, base_dpd):
         base_dpd._compute_energies()
         order, _, rejected = base_dpd.get_stable_phases(base_dpd._energies[:, 0])
-        all_inds = sorted(order + rejected)
-        assert all_inds == list(range(len(base_dpd.labels)))
+        assert sorted(order + rejected) == list(range(len(base_dpd.labels)))
 
 
 # ── plot_at_temperature ───────────────────────────────────────────────────────
@@ -172,10 +186,10 @@ class TestPlotAtTemperature:
         plt.close(fig)
 
     def test_triggers_energy_computation(self):
+        import matplotlib.pyplot as plt
         dpd = DefectPhaseDiagram('Al', [-2, 0], -1.5, -3.2, 300)
         dpd.add_phase('Phase A', 1, 96, -400.1, -398.5, 120.0)
         assert dpd._energies is None
-        import matplotlib.pyplot as plt
         fig, _ = dpd.plot_at_temperature(300)
         assert dpd._energies is not None
         plt.close(fig)
