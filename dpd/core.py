@@ -422,10 +422,11 @@ class DefectPhaseDiagram:
         d_mu = self.mu_solute[np.newaxis, np.newaxis, :]
 
         # Host and solute chemical potential contributions
-        host_term   = (n_total - 2 * n_solute) * self.mu_host    # (n_phases, n_temps)
+        # mu_host and mu_solute_bulk have shape (n_temps,); broadcast to (n_phases, n_temps)
+        host_term   = (n_total - 2 * n_solute) * self.mu_host[np.newaxis, :]    # (n_phases, n_temps)
         solute_term = (
-            2 * n_solute * (self.mu_solute_bulk[:, np.newaxis] + d_mu)
-        )                                                          # (n_phases, 1, 2) → broadcasts
+            2 * n_solute[:, :, np.newaxis] * (self.mu_solute_bulk[np.newaxis, :, np.newaxis] + d_mu)
+        )                                                                         # (n_phases, n_temps, 2)
 
         raw = (
             2 * e_alloy[:, :, np.newaxis]
