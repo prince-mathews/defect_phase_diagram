@@ -59,7 +59,7 @@ See [`examples/example_usage.py`](examples/example_usage.py) for a full walkthro
 
 ## Formation Energy Formula
 
-For each periodic supercell containing two identical defect interfaces, the formation energy per interface area at chemical potential Δμ_solute is:
+For each periodic supercell containing one defect configuration and one pure defect, the formation energy per interface area at chemical potential Δμ_solute is:
 
 ```
 E_f = [2·E_alloy − E_pure − (N − 2n)·μ_host − 2n·(μ_bulk + Δμ_solute)] / (2·A)
