@@ -108,7 +108,7 @@ class DefectPhaseDiagram:
     # Public API
     # ------------------------------------------------------------------
 
-    def add_phase(self, label, n_solute, n_total, e_alloy, e_pure, area):
+    def add_phase(self, label, n_solute, n_total, e_alloy, area, e_pure=None):
         """
         Register a defect phase with the diagram.
 
@@ -116,54 +116,80 @@ class DefectPhaseDiagram:
         recomputed lazily the next time a plot method is called. Calling this
         method invalidates any previously cached energies.
 
+        The supercell always contains two defect interfaces by construction.
+        The ``e_pure`` parameter controls which decoration case applies:
+
+        **One decorated interface** (``e_pure`` provided):
+            One interface carries the solute defect; the other is pure.
+            Formation energy per interface:
+
+            .. code-block:: none
+
+                E_f = [2·E_alloy - E_pure - (N - 2n)·μ_host
+                       - 2n·(μ_bulk + Δμ)] / (2·A)
+
+        **Both interfaces decorated** (``e_pure=None``):
+            Both interfaces are identically decorated. ``n_solute`` and
+            ``n_total`` should be the per-interface counts (i.e. half the
+            supercell values). Formation energy per interface:
+
+            .. code-block:: none
+
+                E_f = [E_alloy - (N - n)·μ_host - n·(μ_bulk + Δμ)] / A
+
         Parameters
         ----------
         label : str
             Human-readable name for the phase (used in legends and labels).
         n_solute : int
-            Number of solute atoms substituted into the supercell.
+            Number of solute atoms per defect interface. For the one-decorated
+            case this equals the total solute atoms in the supercell; for the
+            both-decorated case this is half the supercell total.
         n_total : int
-            Total number of atoms in the supercell.
+            Total number of atoms per defect interface. Same per-interface
+            convention as ``n_solute``.
         e_alloy : float or array-like
-            DFT total energy of the periodic supercell containing the solute
-            defect [eV]. The supercell contains two defect interfaces by
-            construction. Supply a scalar for a temperature-independent value
-            or an array of length ``len(temperatures)`` for
-            temperature-dependent energies (e.g. from free-energy
-            corrections).
-        e_pure : float or array-like
-            DFT total energy of the pure reference supercell [eV]. Same
-            scalar-or-array convention as ``e_alloy``.
+            DFT total energy of the decorated supercell [eV]. Supply a scalar
+            for a temperature-independent value or an array of length
+            ``len(temperatures)`` for temperature-dependent energies (e.g.
+            from free-energy corrections).
         area : float
-            Cross-sectional area of the defect interface [Å²] used for
-            energy normalisation. Since the supercell contains two identical
-            interfaces, the formation energy is computed as
-            ``(2·E_alloy - E_pure - ...) / (2·area)``.
+            Cross-sectional area of one defect interface [Å²] used for energy
+            normalisation.
+        e_pure : float, array-like, or None, optional
+            DFT total energy of the pure reference supercell [eV]. Same
+            scalar-or-array convention as ``e_alloy``. Set to ``None``
+            (default) for the both-decorated case, where no pure reference
+            is needed.
 
         Warns
         -----
         UserWarning
-            If ``e_alloy`` or ``e_pure`` contains any NaN values the phase
-            is skipped entirely and a warning is issued.
+            If ``e_alloy`` or ``e_pure`` (when provided) contains any NaN
+            values the phase is skipped entirely and a warning is issued.
 
         Examples
         --------
-        Add a phase with scalar (temperature-independent) energies:
+        One decorated interface, scalar energies:
 
         >>> dpd.add_phase('GB-I', n_solute=1, n_total=96,
         ...               e_alloy=-400.1, e_pure=-398.5, area=120.0)
 
-        Add a phase with temperature-dependent energies:
+        One decorated interface, temperature-dependent energies:
 
         >>> dpd.add_phase('GB-II', n_solute=2, n_total=96,
         ...               e_alloy=[-401.1, -401.3, -401.6],
         ...               e_pure=[-398.5, -398.7, -399.0],
         ...               area=120.0)
+
+        Both interfaces decorated (no pure reference needed):
+
+        >>> dpd.add_phase('GB-III', n_solute=1, n_total=48,
+        ...               e_alloy=-400.1, area=120.0)
         """
         e_alloy = np.atleast_1d(e_alloy)
-        e_pure = np.atleast_1d(e_pure)
 
-        if np.any(np.isnan(e_alloy)) or np.any(np.isnan(e_pure)):
+        if np.any(np.isnan(e_alloy)):
             warnings.warn(
                 f"Phase '{label}' contains NaN energies and will be excluded.",
                 UserWarning,
@@ -171,12 +197,22 @@ class DefectPhaseDiagram:
             )
             return
 
+        if e_pure is not None:
+            e_pure = np.atleast_1d(e_pure)
+            if np.any(np.isnan(e_pure)):
+                warnings.warn(
+                    f"Phase '{label}' contains NaN energies and will be excluded.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return
+
         self.phases.append({
             'label': label,
             'n_solute': n_solute,
             'n_total': n_total,
             'e_alloy': e_alloy,
-            'e_pure': e_pure,
+            'e_pure': e_pure,  # None signals both-decorated case
             'area': area,
         })
         self._energies = None  # Invalidate cache
@@ -254,12 +290,72 @@ class DefectPhaseDiagram:
         rejected = sorted(set(range(n_p)) - set(order))
         return order, ordered_mu, rejected
 
+    def get_hull(self, temperature):
+        """
+        Return the convex hull vertices of the defect phase diagram at a
+        given temperature.
+
+        The hull is defined by the boundary points of each stability window —
+        one energy value per entry in ``ordered_mu`` — connecting the lowest
+        formation energy envelope across the full ``mu_solute`` range.
+
+        Parameters
+        ----------
+        temperature : float
+            Target temperature [K]. The nearest value in
+            ``self.temperatures`` is selected automatically.
+
+        Returns
+        -------
+        mu_values : np.ndarray, shape (n_boundaries,)
+            Chemical potential [eV] at each hull vertex. Includes
+            ``mu_solute[0]``, all phase-boundary intersections, and
+            ``mu_solute[-1]``.
+        energies : np.ndarray, shape (n_boundaries,)
+            Formation energy [eV/Å²] of the stable phase at each
+            corresponding ``mu_values`` entry.
+
+        Notes
+        -----
+        Energies are returned in raw [eV/Å²] — multiply by ``1000`` for
+        [meV/Å²] if needed, consistent with ``output_energy_units``.
+
+        Examples
+        --------
+        >>> mu_hull, e_hull = dpd.get_hull(300)
+        >>> plt.plot(mu_hull, 1000 * e_hull, marker='o', ms=7, lw=2)
+        """
+        if self._energies is None:
+            self._compute_energies()
+
+        t_idx = np.argmin(np.abs(self.temperatures - temperature))
+        energies_at_t = self._energies[:, t_idx]
+        order, ordered_mu, _ = self.get_stable_phases(energies_at_t)
+
+        mu_values, energies = [], []
+        for i, p_idx in enumerate(order):
+            e = energies_at_t[p_idx]
+            slope = (e[1] - e[0]) / (self.mu_solute[1] - self.mu_solute[0])
+            for mu in [ordered_mu[i], ordered_mu[i + 1]]:
+                mu_values.append(mu)
+                energies.append(e[0] + slope * (mu - self.mu_solute[0]))
+
+        # Deduplicate consecutive identical mu values at phase boundaries
+        mu_arr = np.array(mu_values)
+        e_arr  = np.array(energies)
+        mask   = np.concatenate(([True], ~np.isclose(np.diff(mu_arr), 0)))
+        return mu_arr[mask], e_arr[mask]
+
     def plot_at_temperature(
         self,
         temperature,
         xlim=None,
         ylim=None,
-        alpha_fill=0.7,
+        alpha_fill=1.0,
+        linewidth=2,
+        figsize=(8, 5),
+        fontsize=16,
+        plot_intersections=True,
         legend=True,
     ):
         """
@@ -269,7 +365,7 @@ class DefectPhaseDiagram:
         formation energy line and below by the minimum formation energy.
         Unstable phases are shown as faint dashed lines for reference.
         Vertical dotted lines mark the chemical potentials at which the
-        stable phase changes.
+        stable phase changes, with the μ value annotated.
 
         Parameters
         ----------
@@ -286,7 +382,20 @@ class DefectPhaseDiagram:
             maximum stable formation energy plus a 50-unit margin.
         alpha_fill : float, optional
             Transparency of the filled stability regions, between 0
-            (transparent) and 1 (opaque). Default is ``0.7``.
+            (transparent) and 1 (opaque). Default is ``1.0``.
+        linewidth : float, optional
+            Line width for the formation energy lines of both stable and
+            unstable phases, and for the intersection marker lines.
+            Default is ``2``.
+        figsize : tuple of float, optional
+            Figure dimensions as ``(width, height)`` in inches.
+            Default is ``(8, 5)``.
+        fontsize : int or float, optional
+            Font size for axis labels and tick labels. Tick labels are
+            rendered at the same size for consistency. Default is ``16``.
+        plot_intersections : bool, optional
+            Whether to draw vertical lines and annotate the μ value at each
+            phase boundary. Default is ``True``.
         legend : bool, optional
             Whether to display the phase legend outside the right edge of
             the plot. Default is ``True``.
@@ -305,7 +414,10 @@ class DefectPhaseDiagram:
 
         Examples
         --------
-        >>> fig, ax = dpd.plot_at_temperature(600, ylim=(-500, 200))
+        >>> fig, ax = dpd.plot_at_temperature(
+        ...     600, ylim=(-500, 200), figsize=(10, 6), fontsize=14,
+        ...     plot_intersections=False,
+        ... )
         >>> ax.set_title('DPD at 600 K')
         >>> plt.show()
         """
@@ -317,19 +429,43 @@ class DefectPhaseDiagram:
             self._energies[:, t_idx]
         )
 
-        fig, ax = plt.subplots(figsize=(8, 5))
+        fig, ax = plt.subplots(figsize=figsize)
         y_floor = float(np.min(self._energies[:, t_idx]) * self._unit_scale)
 
-        # Unstable phases — faint dashed reference lines
-        for r_idx in rejected:
-            e = self._energies[r_idx, t_idx] * self._unit_scale
-            ax.plot(
-                self.mu_solute, e,
-                color=self.palette[r_idx],
-                ls='--', alpha=0.3, lw=1,
-            )
+        # Resolve axis limits early so intersection labels can be positioned
+        x_min = xlim[0] if xlim is not None else float(self.mu_solute[0])
+        x_max = xlim[1] if xlim is not None else float(self.mu_solute[1])
+        x_range = x_max - x_min
 
-        # Stable phases — filled stability windows
+        if ylim:
+            y_min_lim, y_max_lim = ylim
+        else:
+            e_stable_max = float(
+                np.max(self._energies[order, t_idx]) * self._unit_scale
+            )
+            y_min_lim = y_floor
+            y_max_lim = e_stable_max + 50
+        y_range = y_max_lim - y_min_lim
+
+        # All phases — dashed lines across full mu_solute range drawn first
+        # so they are visible in regions where no phase is stable
+        for p_idx in range(len(self.labels)):
+            e = self._energies[p_idx, t_idx] * self._unit_scale
+            if p_idx in rejected:
+                ax.plot(
+                    self.mu_solute, e,
+                    color=self.palette[p_idx],
+                    ls='--', alpha=0.3, lw=linewidth,
+                    label=self.labels[p_idx],
+                )
+            else:
+                ax.plot(
+                    self.mu_solute, e,
+                    color=self.palette[p_idx],
+                    ls='--', alpha=0.7, lw=linewidth,
+                )
+
+        # Stable phases — filled stability windows drawn on top
         for i, p_idx in enumerate(order):
             e = self._energies[p_idx, t_idx]
             mu_s, mu_e = ordered_mu[i], ordered_mu[i + 1]
@@ -343,23 +479,26 @@ class DefectPhaseDiagram:
                 alpha=alpha_fill,
                 label=self.labels[p_idx],
             )
-            if i > 0:
-                ax.axvline(mu_s, color='k', ls=':', lw=1, alpha=0.4)
 
-        ax.set_xlabel(self.xlabel, fontsize=13)
-        ax.set_ylabel(self.ylabel, fontsize=13)
-        ax.set_xlim(xlim if xlim is not None else self.mu_solute)
+            if i > 0 and plot_intersections:
+                ax.axvline(mu_s, color='k', ls='--', lw=1.25, alpha=0.7)
+                ax.text(
+                    mu_s - 0.01 * x_range,
+                    y_min_lim - 0.28 * y_range,
+                    r'$\mu=${:.3f}'.format(mu_s),
+                    fontsize=fontsize - 7,
+                    rotation=90,
+                )
 
-        if ylim:
-            ax.set_ylim(ylim)
-        else:
-            e_stable_max = float(
-                np.max(self._energies[order, t_idx]) * self._unit_scale
-            )
-            ax.set_ylim(y_floor, e_stable_max + 50)
+        ax.set_xlabel(self.xlabel, fontsize=fontsize)
+        ax.set_ylabel(self.ylabel, fontsize=fontsize, labelpad=-5)
+        ax.tick_params(axis='both', labelsize=fontsize)
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min_lim, y_max_lim)
 
         if legend:
-            ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+            ax.legend(fontsize=fontsize - 2, loc='upper left',
+                      bbox_to_anchor=(1, 1))
 
         fig.tight_layout()
         return fig, ax
@@ -373,9 +512,10 @@ class DefectPhaseDiagram:
         Vectorized computation of formation energies for all phases and
         temperatures, caching the result in ``self._energies``.
 
-        All supercells are fully periodic and contain two identical defect
-        interfaces by construction. The formation energy per interface area
-        is evaluated as:
+        Two decoration cases are supported, determined by whether ``e_pure``
+        was supplied to :meth:`add_phase`:
+
+        **One decorated interface** (``e_pure`` provided):
 
         .. math::
 
@@ -384,10 +524,17 @@ class DefectPhaseDiagram:
                          - 2n(\\mu_{\\rm bulk} + \\Delta\\mu_{\\rm solute})}
                         {2A}
 
-        where :math:`N` is the total atom count, :math:`n` the number of
-        solute atoms, and :math:`A` the cross-sectional area of one
-        interface. The factor of 2 in the denominator normalises per
-        interface rather than per cell.
+        **Both interfaces decorated** (``e_pure=None``):
+
+        .. math::
+
+            E_f = \\frac{E_{\\rm alloy}
+                         - (N - n)\\mu_{\\rm host}
+                         - n(\\mu_{\\rm bulk} + \\Delta\\mu_{\\rm solute})}
+                        {A}
+
+        In both cases :math:`N`, :math:`n`, and :math:`A` are per-interface
+        quantities.
 
         Raises
         ------
@@ -411,32 +558,71 @@ class DefectPhaseDiagram:
 
         # Shape: (n_phases, n_temps)
         e_alloy = np.array(df['e_alloy'].tolist())
-        e_pure  = np.array(df['e_pure'].tolist())
 
         # Shape: (n_phases, 1) for broadcasting over temperatures
         area     = df['area'].values[:, np.newaxis]
         n_solute = df['n_solute'].values[:, np.newaxis]
         n_total  = df['n_total'].values[:, np.newaxis]
 
+        # Boolean mask: True where e_pure was provided (one-decorated case)
+        one_decorated = np.array(
+            [p['e_pure'] is not None for p in self.phases], dtype=bool
+        )
+
         # Solute chemical potential endpoints: shape (1, 1, 2) for broadcasting
         d_mu = self.mu_solute[np.newaxis, np.newaxis, :]
 
-        # Host and solute chemical potential contributions
-        # mu_host and mu_solute_bulk have shape (n_temps,); broadcast to (n_phases, n_temps)
-        host_term   = (n_total - 2 * n_solute) * self.mu_host[np.newaxis, :]    # (n_phases, n_temps)
-        solute_term = (
-            2 * n_solute[:, :, np.newaxis] * (self.mu_solute_bulk[np.newaxis, :, np.newaxis] + d_mu)
-        )                                                                         # (n_phases, n_temps, 2)
+        # Initialise output array: (n_phases, n_temps, 2)
+        n_temps = len(self.temperatures)
+        raw = np.zeros((len(self.phases), n_temps, 2))
 
-        raw = (
-            2 * e_alloy[:, :, np.newaxis]
-            - e_pure[:, :, np.newaxis]
-            - host_term[:, :, np.newaxis]
-            - solute_term
-        )                                                          # (n_phases, n_temps, 2)
+        # --- One-decorated case: E_f = [2·E_alloy - E_pure - ...] / (2·A) ---
+        if one_decorated.any():
+            e_pure_arr = np.array(
+                [p['e_pure'] for p in self.phases if p['e_pure'] is not None]
+            )                                                            # (n_one, n_temps)
 
-        # Normalise per interface: supercell contains 2 identical interfaces
-        self._energies = raw / (2 * area[:, :, np.newaxis])
+            host_term_one = (
+                (n_total - 2 * n_solute) * self.mu_host[np.newaxis, :]
+            )[one_decorated]                                             # (n_one, n_temps)
+
+            solute_term_one = (
+                2 * n_solute[:, :, np.newaxis]
+                * (self.mu_solute_bulk[np.newaxis, :, np.newaxis] + d_mu)
+            )[one_decorated]                                             # (n_one, n_temps, 2)
+
+            raw[one_decorated] = (
+                2 * e_alloy[one_decorated, :, np.newaxis]
+                - e_pure_arr[:, :, np.newaxis]
+                - host_term_one[:, :, np.newaxis]
+                - solute_term_one
+            )
+
+        # --- Both-decorated case: E_f = [E_alloy - (N-n)·μ_host - n·(...)] / A ---
+        both_decorated = ~one_decorated
+        if both_decorated.any():
+            host_term_both = (
+                (n_total - n_solute) * self.mu_host[np.newaxis, :]
+            )[both_decorated]                                            # (n_both, n_temps)
+
+            solute_term_both = (
+                n_solute[:, :, np.newaxis]
+                * (self.mu_solute_bulk[np.newaxis, :, np.newaxis] + d_mu)
+            )[both_decorated]                                            # (n_both, n_temps, 2)
+
+            raw[both_decorated] = (
+                e_alloy[both_decorated, :, np.newaxis]
+                - host_term_both[:, :, np.newaxis]
+                - solute_term_both
+            )
+
+        # Normalise: one-decorated → 2·A; both-decorated → A
+        divisor = np.where(
+            one_decorated[:, np.newaxis, np.newaxis],
+            2.0 * area[:, :, np.newaxis],
+                  area[:, :, np.newaxis],
+        )
+        self._energies = raw / divisor
 
         self.labels = df['label'].tolist()
         self.palette = (
